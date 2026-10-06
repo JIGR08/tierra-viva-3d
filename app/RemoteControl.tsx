@@ -7,6 +7,7 @@ import QRCode from "qrcode";
 type Command =
   | { type: "rotate"; dx: number; dy: number }
   | { type: "zoom"; direction: "in" | "out" }
+  | { type: "select-marker" }
   | { type: "reset" };
 
 export default function RemoteControl() {
@@ -78,6 +79,7 @@ export default function RemoteControl() {
           <button onClick={() => send({ type: "zoom", direction: "out" })}>−</button>
           <button className="resetRemote" onClick={() => send({ type: "reset" })}>CENTRAR</button>
           <button onClick={() => send({ type: "zoom", direction: "in" })}>+</button>
+          <button className="openMarkerRemote" onClick={() => send({ type: "select-marker" })}>ABRIR PUNTO ROJO</button>
         </div>
       </section>
     );
