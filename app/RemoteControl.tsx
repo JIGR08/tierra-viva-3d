@@ -82,7 +82,7 @@ export default function RemoteControl() {
         </div>
         <div className="remoteMarkers">
           <span>PUNTOS ROJOS</span>
-          <button onClick={() => send({ type: "select-marker", country: "Bangladés" })}><i />Roberto Pérez · Bangladesh</button>
+          <button onClick={() => send({ type: "select-marker", country: "Bangladesh" })}><i />Roberto Pérez · Bangladesh</button>
           <button onClick={() => send({ type: "select-marker", country: "Senegal" })}><i />Fernando Cruz · Senegal</button>
           <button onClick={() => send({ type: "select-marker", country: "Tanzania" })}><i />Luis López · Tanzania</button>
           <button onClick={() => send({ type: "select-marker", country: "India" })}><i />Lydia · India</button>
