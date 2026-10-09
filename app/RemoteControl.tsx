@@ -22,18 +22,48 @@ export default function RemoteControl() {
   const dragged = useRef(false);
 
   useEffect(() => {
-    const peer = new Peer();
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let stopped = false;
+    const peer = new Peer({
+      host: "0.peerjs.com",
+      port: 443,
+      path: "/",
+      secure: true,
+      config: {
+        iceServers: [
+          { urls: "stun:stun.cloudflare.com:3478" },
+          { urls: "stun:stun.l.google.com:19302" },
+          { urls: "stun:stun1.l.google.com:19302" },
+        ],
+      },
+    });
     if (isPhone && target) {
-      peer.on("open", () => {
+      const connect = () => {
+        if (stopped || peer.destroyed || connection.current?.open) return;
+        setStatus("CONECTANDO CON EL GLOBO…");
         const conn = peer.connect(target, { reliable: true });
         connection.current = conn;
-        conn.on("open", () => setStatus("CONECTADO AL GLOBO"));
-        conn.on("close", () => setStatus("CONEXIÓN CERRADA"));
-        conn.on("error", () => setStatus("NO SE PUDO CONECTAR"));
+        conn.on("open", () => {
+          if (retryTimer) clearTimeout(retryTimer);
+          setStatus("CONECTADO AL GLOBO");
+          conn.send({ type: "ping" });
+        });
+        const retry = () => {
+          if (stopped) return;
+          setStatus("RECONECTANDO… MANTÉN AMBAS PANTALLAS ABIERTAS");
+          retryTimer = setTimeout(connect, 2500);
+        };
+        conn.on("close", retry);
+        conn.on("error", retry);
+      };
+      peer.on("open", connect);
+      peer.on("disconnected", () => {
+        setStatus("RECUPERANDO CONEXIÓN…");
+        if (!peer.destroyed) peer.reconnect();
       });
     } else {
       peer.on("open", async (id) => {
-        const url = `${window.location.origin}${window.location.pathname}?control=${encodeURIComponent(id)}`;
+        const url = `${window.location.origin}${window.location.pathname}?control=${encodeURIComponent(id)}&session=${Date.now()}`;
         setQr(await QRCode.toDataURL(url, { width: 520, margin: 3, errorCorrectionLevel: "H" }));
         setStatus("ESCANEA EL QR CON TU TELÉFONO");
       });
@@ -43,9 +73,18 @@ export default function RemoteControl() {
         conn.on("data", (data) => window.dispatchEvent(new CustomEvent("remote-globe", { detail: data })));
         conn.on("close", () => setStatus("TELÉFONO DESCONECTADO"));
       });
+      peer.on("disconnected", () => {
+        setStatus("RECONECTANDO EL GLOBO…");
+        if (!peer.destroyed) peer.reconnect();
+      });
     }
-    peer.on("error", () => setStatus("ERROR DE CONEXIÓN · INTENTA DE NUEVO"));
-    return () => peer.destroy();
+    peer.on("error", (error) => setStatus(`ERROR DE CONEXIÓN · ${error.type.toUpperCase()}`));
+    return () => {
+      stopped = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      connection.current?.close();
+      peer.destroy();
+    };
   }, [isPhone, target]);
 
   const send = (command: Command) => {
