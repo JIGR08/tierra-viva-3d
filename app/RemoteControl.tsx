@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Peer, type DataConnection } from "peerjs";
+import mqtt, { type MqttClient } from "mqtt";
 import QRCode from "qrcode";
 
 type Command =
@@ -17,87 +17,64 @@ export default function RemoteControl() {
   const [open, setOpen] = useState(isPhone);
   const [status, setStatus] = useState("PREPARANDO CONEXIÓN…");
   const [qr, setQr] = useState("");
-  const connection = useRef<DataConnection | null>(null);
+  const client = useRef<MqttClient | null>(null);
   const pointer = useRef<{ x: number; y: number } | null>(null);
   const dragged = useRef(false);
 
   useEffect(() => {
-    let retryTimer: ReturnType<typeof setTimeout> | null = null;
-    let stopped = false;
-    const peer = new Peer({
-      host: "0.peerjs.com",
-      port: 443,
-      path: "/",
-      secure: true,
-      config: {
-        iceServers: [
-          { urls: "stun:stun.cloudflare.com:3478" },
-          { urls: "stun:stun.l.google.com:19302" },
-          { urls: "stun:stun1.l.google.com:19302" },
-          {
-            urls: [
-              "turn:openrelay.metered.ca:80",
-              "turn:openrelay.metered.ca:443",
-              "turns:openrelay.metered.ca:443",
-            ],
-            username: "openrelayproject",
-            credential: "openrelayproject",
-          },
-        ],
-      },
+    const room = target || crypto.randomUUID().replaceAll("-", "");
+    const topic = `tierra-viva-3d/${room}`;
+    const mq = mqtt.connect("wss://broker.hivemq.com:8884/mqtt", {
+      clientId: `tierra_${crypto.randomUUID().slice(0, 12)}`,
+      clean: true,
+      reconnectPeriod: 1500,
+      connectTimeout: 12000,
+      keepalive: 20,
     });
-    if (isPhone && target) {
-      const connect = () => {
-        if (stopped || peer.destroyed || connection.current?.open) return;
-        setStatus("CONECTANDO CON EL GLOBO…");
-        const conn = peer.connect(target, { reliable: true });
-        connection.current = conn;
-        conn.on("open", () => {
-          if (retryTimer) clearTimeout(retryTimer);
+    client.current = mq;
+    setStatus("CONECTANDO AL CONTROL…");
+    mq.on("connect", async () => {
+      mq.subscribe(topic, { qos: 1 }, async (error) => {
+        if (error) return setStatus("ERROR AL CREAR LA SALA");
+        if (isPhone) {
+          setStatus("BUSCANDO LA COMPUTADORA…");
+          mq.publish(topic, JSON.stringify({ sender: "phone", kind: "hello" }), { qos: 1 });
+        } else {
+          const url = `${window.location.origin}${window.location.pathname}?control=${encodeURIComponent(room)}`;
+          setQr(await QRCode.toDataURL(url, { width: 520, margin: 3, errorCorrectionLevel: "H" }));
+          setStatus("ESCANEA EL QR CON TU TELÉFONO");
+        }
+      });
+    });
+    mq.on("message", (_topic, payload) => {
+      try {
+        const message = JSON.parse(payload.toString());
+        if (!isPhone && message.sender === "phone") {
+          if (message.kind === "hello") {
+            setStatus("TELÉFONO CONECTADO");
+            mq.publish(topic, JSON.stringify({ sender: "desktop", kind: "ready" }), { qos: 1 });
+          } else if (message.command) {
+            window.dispatchEvent(new CustomEvent("remote-globe", { detail: message.command }));
+          }
+        } else if (isPhone && message.sender === "desktop" && message.kind === "ready") {
           setStatus("CONECTADO AL GLOBO");
-          conn.send({ type: "ping" });
-        });
-        const retry = () => {
-          if (stopped) return;
-          setStatus("RECONECTANDO… MANTÉN AMBAS PANTALLAS ABIERTAS");
-          retryTimer = setTimeout(connect, 2500);
-        };
-        conn.on("close", retry);
-        conn.on("error", retry);
-      };
-      peer.on("open", connect);
-      peer.on("disconnected", () => {
-        setStatus("RECUPERANDO CONEXIÓN…");
-        if (!peer.destroyed) peer.reconnect();
-      });
-    } else {
-      peer.on("open", async (id) => {
-        const url = `${window.location.origin}${window.location.pathname}?control=${encodeURIComponent(id)}&session=${Date.now()}`;
-        setQr(await QRCode.toDataURL(url, { width: 520, margin: 3, errorCorrectionLevel: "H" }));
-        setStatus("ESCANEA EL QR CON TU TELÉFONO");
-      });
-      peer.on("connection", (conn) => {
-        connection.current = conn;
-        conn.on("open", () => setStatus("TELÉFONO CONECTADO"));
-        conn.on("data", (data) => window.dispatchEvent(new CustomEvent("remote-globe", { detail: data })));
-        conn.on("close", () => setStatus("TELÉFONO DESCONECTADO"));
-      });
-      peer.on("disconnected", () => {
-        setStatus("RECONECTANDO EL GLOBO…");
-        if (!peer.destroyed) peer.reconnect();
-      });
-    }
-    peer.on("error", (error) => setStatus(`ERROR DE CONEXIÓN · ${error.type.toUpperCase()}`));
+        }
+      } catch {}
+    });
+    mq.on("reconnect", () => setStatus("RECONECTANDO AUTOMÁTICAMENTE…"));
+    mq.on("offline", () => setStatus("SIN RED · ESPERANDO CONEXIÓN…"));
+    mq.on("error", () => setStatus("ERROR DE RED · REINTENTANDO…"));
     return () => {
-      stopped = true;
-      if (retryTimer) clearTimeout(retryTimer);
-      connection.current?.close();
-      peer.destroy();
+      client.current = null;
+      mq.end(true);
     };
   }, [isPhone, target]);
 
   const send = (command: Command) => {
-    if (connection.current?.open) connection.current.send(command);
+    const room = target;
+    if (client.current?.connected && room) {
+      client.current.publish(`tierra-viva-3d/${room}`, JSON.stringify({ sender: "phone", command }), { qos: 1 });
+    }
   };
 
   if (isPhone) {
