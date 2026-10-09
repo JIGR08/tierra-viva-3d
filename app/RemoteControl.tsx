@@ -7,6 +7,7 @@ import QRCode from "qrcode";
 type Command =
   | { type: "rotate"; dx: number; dy: number }
   | { type: "zoom"; direction: "in" | "out" }
+  | { type: "tap"; x: number; y: number }
   | { type: "select-marker"; country: string }
   | { type: "reset" };
 
@@ -18,6 +19,7 @@ export default function RemoteControl() {
   const [qr, setQr] = useState("");
   const connection = useRef<DataConnection | null>(null);
   const pointer = useRef<{ x: number; y: number } | null>(null);
+  const dragged = useRef(false);
 
   useEffect(() => {
     const peer = new Peer();
@@ -60,19 +62,27 @@ export default function RemoteControl() {
           className="touchPad"
           onPointerDown={(event) => {
             event.currentTarget.setPointerCapture(event.pointerId);
+            dragged.current = false;
             pointer.current = { x: event.clientX, y: event.clientY };
           }}
           onPointerMove={(event) => {
             if (!pointer.current) return;
             const dx = event.clientX - pointer.current.x;
             const dy = event.clientY - pointer.current.y;
+            if (Math.abs(dx) + Math.abs(dy) > 2) dragged.current = true;
             pointer.current = { x: event.clientX, y: event.clientY };
             send({ type: "rotate", dx, dy });
           }}
-          onPointerUp={() => (pointer.current = null)}
+          onPointerUp={(event) => {
+            if (!dragged.current) {
+              const rect = event.currentTarget.getBoundingClientRect();
+              send({ type: "tap", x: ((event.clientX - rect.left) / rect.width) * 2 - 1, y: -(((event.clientY - rect.top) / rect.height) * 2 - 1) });
+            }
+            pointer.current = null;
+          }}
           onPointerCancel={() => (pointer.current = null)}
         >
-          <span>ARRASTRA PARA GIRAR</span>
+          <span>ARRASTRA PARA GIRAR · TOCA PARA ABRIR</span>
           <i>◎</i>
         </div>
         <div className="remoteButtons">
