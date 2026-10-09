@@ -9,6 +9,7 @@ type Command =
   | { type: "zoom"; direction: "in" | "out" }
   | { type: "tap"; x: number; y: number }
   | { type: "select-marker"; country: string }
+  | { type: "close-card" }
   | { type: "reset" };
 
 export default function RemoteControl() {
@@ -20,6 +21,7 @@ export default function RemoteControl() {
   const client = useRef<MqttClient | null>(null);
   const pointer = useRef<{ x: number; y: number } | null>(null);
   const dragged = useRef(false);
+  const motion = useRef({ dx: 0, dy: 0, frame: 0 });
 
   useEffect(() => {
     const room = target || crypto.randomUUID().replaceAll("-", "");
@@ -74,6 +76,7 @@ export default function RemoteControl() {
     return () => {
       if (heartbeat) clearInterval(heartbeat);
       if (!isPhone && mq.connected) mq.publish(topic, "", { retain: true });
+      if (motion.current.frame) cancelAnimationFrame(motion.current.frame);
       client.current = null;
       mq.end(true);
     };
@@ -82,8 +85,19 @@ export default function RemoteControl() {
   const send = (command: Command) => {
     const room = target;
     if (client.current?.connected && room) {
-      client.current.publish(`tierra-viva-3d/${room}`, JSON.stringify({ sender: "phone", command }), { qos: 1 });
+      client.current.publish(`tierra-viva-3d/${room}`, JSON.stringify({ sender: "phone", command }), { qos: command.type === "rotate" ? 0 : 1 });
     }
+  };
+
+  const sendMotion = (dx: number, dy: number) => {
+    motion.current.dx += dx;
+    motion.current.dy += dy;
+    if (motion.current.frame) return;
+    motion.current.frame = requestAnimationFrame(() => {
+      const { dx: totalX, dy: totalY } = motion.current;
+      motion.current = { dx: 0, dy: 0, frame: 0 };
+      send({ type: "rotate", dx: totalX, dy: totalY });
+    });
   };
 
   if (isPhone) {
@@ -105,7 +119,7 @@ export default function RemoteControl() {
             const dy = event.clientY - pointer.current.y;
             if (Math.abs(dx) + Math.abs(dy) > 2) dragged.current = true;
             pointer.current = { x: event.clientX, y: event.clientY };
-            send({ type: "rotate", dx, dy });
+            sendMotion(dx, dy);
           }}
           onPointerUp={(event) => {
             if (!dragged.current) {
@@ -131,6 +145,7 @@ export default function RemoteControl() {
           <button onClick={() => send({ type: "select-marker", country: "Tanzania" })}><i />Luis López · Tanzania</button>
           <button onClick={() => send({ type: "select-marker", country: "India" })}><i />Lydia · India</button>
         </div>
+        <button className="closeCardRemote" onClick={() => send({ type: "close-card" })}>× CERRAR TARJETA</button>
       </section>
     );
   }
