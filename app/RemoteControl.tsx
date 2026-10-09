@@ -24,6 +24,7 @@ export default function RemoteControl() {
   useEffect(() => {
     const room = target || crypto.randomUUID().replaceAll("-", "");
     const topic = `tierra-viva-3d/${room}`;
+    let heartbeat: ReturnType<typeof setInterval> | null = null;
     const mq = mqtt.connect("wss://broker.hivemq.com:8884/mqtt", {
       clientId: `tierra_${crypto.randomUUID().slice(0, 12)}`,
       clean: true,
@@ -34,15 +35,21 @@ export default function RemoteControl() {
     client.current = mq;
     setStatus("CONECTANDO AL CONTROL…");
     mq.on("connect", async () => {
+      if (heartbeat) clearInterval(heartbeat);
       mq.subscribe(topic, { qos: 1 }, async (error) => {
         if (error) return setStatus("ERROR AL CREAR LA SALA");
         if (isPhone) {
           setStatus("BUSCANDO LA COMPUTADORA…");
-          mq.publish(topic, JSON.stringify({ sender: "phone", kind: "hello" }), { qos: 1 });
+          const hello = () => mq.publish(topic, JSON.stringify({ sender: "phone", kind: "hello", at: Date.now() }), { qos: 1 });
+          hello();
+          heartbeat = setInterval(hello, 2000);
         } else {
           const url = `${window.location.origin}${window.location.pathname}?control=${encodeURIComponent(room)}`;
           setQr(await QRCode.toDataURL(url, { width: 520, margin: 3, errorCorrectionLevel: "H" }));
           setStatus("ESCANEA EL QR CON TU TELÉFONO");
+          const announce = () => mq.publish(topic, JSON.stringify({ sender: "desktop", kind: "ready", at: Date.now() }), { qos: 1, retain: true });
+          announce();
+          heartbeat = setInterval(announce, 2000);
         }
       });
     });
@@ -52,11 +59,11 @@ export default function RemoteControl() {
         if (!isPhone && message.sender === "phone") {
           if (message.kind === "hello") {
             setStatus("TELÉFONO CONECTADO");
-            mq.publish(topic, JSON.stringify({ sender: "desktop", kind: "ready" }), { qos: 1 });
+            mq.publish(topic, JSON.stringify({ sender: "desktop", kind: "ready", at: Date.now() }), { qos: 1, retain: true });
           } else if (message.command) {
             window.dispatchEvent(new CustomEvent("remote-globe", { detail: message.command }));
           }
-        } else if (isPhone && message.sender === "desktop" && message.kind === "ready") {
+        } else if (isPhone && message.sender === "desktop" && message.kind === "ready" && Date.now() - message.at < 7000) {
           setStatus("CONECTADO AL GLOBO");
         }
       } catch {}
@@ -65,6 +72,8 @@ export default function RemoteControl() {
     mq.on("offline", () => setStatus("SIN RED · ESPERANDO CONEXIÓN…"));
     mq.on("error", () => setStatus("ERROR DE RED · REINTENTANDO…"));
     return () => {
+      if (heartbeat) clearInterval(heartbeat);
+      if (!isPhone && mq.connected) mq.publish(topic, "", { retain: true });
       client.current = null;
       mq.end(true);
     };
